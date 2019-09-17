@@ -213,20 +213,24 @@ def calc_profile_error( flux, flux_err, sky_val, sky_err, zeropoint, sky_err_sys
 
 # Calculates the upper and lower colour error bars in mag, given SB profiles and errors
 # in linear units. "Flux" variables refer to these linear units (median flux per pixel)
-# Assumes random SB error and systematic sky errors (eg. due to large scale variations in bkgd)
+# Assumes random errors and systematic sky errors (eg. due to large scale variations in bkgd)
 # are independent. 
 #
-#!# Currently neglects random sky error (usually negligible compared to random SB error) 
-# 
-def calc_colour_error( g_flux, g_err, r_flux, r_err, g_sky, r_sky, dg_sky = 0, dr_sky = 0):
+def calc_colour_error( g_flux, g_err, r_flux, r_err, g_sky, r_sky, 
+                       g_sky_err, r_sky_err, g_sky_err_sys = 0, r_sky_err_sys = 0 ):
     
     dg = 2.5 * np.array(g_err) / ( (np.array(g_flux) - g_sky) * np.log(10.) )
     dr = 2.5 * np.array(r_err) / ( (np.array(r_flux) - r_sky) * np.log(10.) )
     
-    dg_sky = 2.5 * dg_sky / ( (np.array(g_flux) - g_sky) * np.log(10.) )
-    dr_sky = 2.5 * dr_sky / ( (np.array(r_flux) - r_sky) * np.log(10.) )
+    dg_sky = 2.5 * g_sky_err / ( (np.array(g_flux) - g_sky) * np.log(10.) )
+    dr_sky = 2.5 * r_sky_err / ( (np.array(r_flux) - r_sky) * np.log(10.) )
+
+    dg_sky_sys = 2.5 * g_sky_err_sys / ( (np.array(g_flux) - g_sky) * np.log(10.) )
+    dr_sky_sys = 2.5 * r_sky_err_sys / ( (np.array(r_flux) - r_sky) * np.log(10.) )
     
-    d_gmr = np.sqrt( np.square(dg) + np.square(dr) + np.square(dg_sky) + np.square(dr_sky) )
+    d_gmr = np.sqrt(  np.square(dg) + np.square(dr) 
+                    + np.square(dg_sky) + np.square(dr_sky) 
+                    + np.square(dg_sky_sys) + np.square(dr_sky_sys) )
     
     return d_gmr
 
