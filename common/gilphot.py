@@ -132,6 +132,46 @@ def make_slice_mask( image, PA, center = None, width=0, return_r = False ):
 
 #############################################################################################################
 
+# Make a source mask from ds9 regions file (for circular regions)
+# If mask is for a source-subtracted image, will also identify pixels masked by MRF (== 0.000)
+#
+
+from astropy.io import fits
+from skimage.morphology import erosion, dilation
+from skimage.morphology import disk
+
+def make_source_mask( image, header, regionsfile, outfile, mask_zeros = True, expand = 5 ):
+
+    ymax, xmax = np.shape( image )
+    mask = np.zeros( (ymax, xmax) )
+
+    # Read in file with X Y positions of stars to be masked
+    f = open( regionsfile,'r')
+    for line in f:
+        x = int( float( line.split(',')[0] ) )
+        y = int( float( line.split(',')[1] ) )
+        rad = ( float( line.split(',')[2] ) )
+
+        temp_mask = np.zeros( (ymax, xmax) )
+        for i in range( 0, ymax ):
+            for j in range( 0, xmax ):
+                if ( i - y )**2 + ( j - x )**2 <= rad**2:
+                    temp_mask[ i,j ] = 1
+
+        mask = mask + temp_mask
+
+    f.close()
+
+    if mask_zeros == True:
+        mask[ image == 0.00 ] = 1
+
+    mask = dilation( mask, disk(expand) )   # Expanding mask
+   
+    fits.writeto( outfile, mask, header, clobber=True )
+
+
+#############################################################################################################
+
 # Calculate surface brightness profile (in linear units) within a rectangular slice
 # PA is measured CLOCKWISE from East (if East is left)
 #
