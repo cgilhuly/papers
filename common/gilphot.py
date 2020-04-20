@@ -169,6 +169,8 @@ def make_source_mask( image, header, regionsfile, outfile, mask_zeros = True, ex
    
     fits.writeto( outfile, mask, header, clobber=True )
 
+    return mask
+
 
 #############################################################################################################
 
