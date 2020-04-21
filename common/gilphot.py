@@ -294,3 +294,134 @@ def write_profile( radii, SB, err=None, filename="~/Workspace/temp_profile.txt" 
             fout.write( '\n' )
         
     fout.close()
+
+
+#############################################################################################################
+
+# Measure sky level and uncertainty in median sky
+#
+
+import matplotlib.pyplot as plt
+
+def sky_stats(masked_image, showHist=False):
+
+    sky_pixels = masked_image.compressed()
+
+    if len(sky_pixels) == 0:
+        return np.nan, np.nan
+
+    median = np.median(sky_pixels)
+
+    med_err = np.std( sky_pixels ) / np.sqrt( len(sky_pixels) ) * np.sqrt( np.pi/2. )
+
+    if showHist:
+        plt.hist(sky_pixels, bins=100)
+        plt.show()
+
+    return median, med_err
+
+
+#############################################################################################################
+
+# Measure variation in image between azimuthal sectors
+#
+def measure_azimuthal_variation(image, sectors=8, initial_mask=None, center=None, theta0=None):
+
+    ymax, xmax = np.shape(image)
+    if center:
+        y0 = center[0]
+        x0 = center[1]
+    else:
+        y0 = int(ymax/2.)
+        x0 = int(xmax/2.)
+
+    if initial_mask is None:
+        initial_mask = np.zeros((ymax, xmax)) # Starting with "blank" mask if there is no input mask
+
+    if theta0 == None:
+        theta0 = np.random.rand()*2.*np.pi # Random starting angle
+    delta_theta = 2*np.pi / sectors
+
+    skies = []
+    sky_errs = []
+    sky_noise = []
+    central_theta = []
+
+    for i in range(0,sectors):
+
+        theta1 = theta0 + i*delta_theta
+        theta2 = theta1 + delta_theta
+        central_theta.append( (theta1 + theta2)/2. )
+
+        sector_mask = make_sector_mask(image, theta1, theta2)
+        temp_mask = initial_mask + sector_mask
+        masked_image = np.ma.masked_where(temp_mask > 0, image)
+        # plt.imshow(temp_mask); plt.show()   # For troubleshooting
+
+        median, med_err = sky_stats(masked_image)
+        sky_pixels = masked_image.compressed()
+
+        skies.append(median)
+        sky_errs.append(med_err)
+        sky_noise.append(np.std(sky_pixels))
+
+        print()
+        print(f"Sector {i}: theta = {theta1*180./np.pi} - {theta2*180./np.pi} degrees")
+        print(f"median sky = {median:.3f} +/- {med_err:.3f}")
+        print(f"mean sky = {np.mean(sky_pixels):.3f} +/- {np.std(sky_pixels)/np.sqrt(len(sky_pixels)):.3f}")
+
+
+    return skies, sky_errs, sky_noise, central_theta
+
+
+#############################################################################################################
+
+# Measure variation in image between azimuthal sectors
+#
+def measure_radial_variation(image, sectors=9, rad1=600, rad2=1500, initial_mask=None, center=None):
+
+    ymax, xmax = np.shape(image)
+    if center:
+        y0 = center[0]
+        x0 = center[1]
+    else:
+        y0 = int(ymax/2.)
+        x0 = int(xmax/2.)
+
+    if np.any(np.isin(initial_mask, None)):
+        initial_mask = np.zeros((ymax, xmax)) # Starting with "blank" mask if there is no input mask
+
+    delta_rad = (rad2 - rad1)/sectors
+
+    skies = []
+    sky_errs = []
+    sky_noise = []
+    central_radii = []
+
+    for i in range(0,sectors):
+
+        r1 = rad1 + i*delta_rad
+        r2 = r1 + delta_rad
+        central_radii.append( (r1 + r2)/2. )
+
+        annulus_mask = make_annulus_mask(image, r1, r2)
+        temp_mask = initial_mask + annulus_mask
+        masked_image = np.ma.masked_where(temp_mask > 0, image)
+        #plt.imshow(temp_mask); plt.show()  # For troubleshooting
+
+        median, med_err = sky_stats(masked_image)
+        sky_pixels = masked_image.compressed()
+
+        skies.append(median)
+        sky_errs.append(med_err)
+        sky_noise.append(np.std(sky_pixels))
+
+        print()
+        print(f"Sector {i}: radius {r1} - {r2} pixels")
+        print(f"median sky = {median:.3f} +/- {med_err:.3f}")
+        print(f"mean sky = {np.mean(sky_pixels):.3f} +/- {np.std(sky_pixels)/np.sqrt(len(sky_pixels)):.3f}")
+        print(f"sky RMS = {np.std(sky_pixels):.3f}")
+
+
+    return skies, sky_errs, sky_noise, central_radii
+
