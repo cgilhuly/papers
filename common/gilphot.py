@@ -145,6 +145,10 @@ def make_source_mask( image, header, regionsfile, outfile, mask_zeros = True, ex
     ymax, xmax = np.shape( image )
     mask = np.zeros( (ymax, xmax) )
 
+    if mask_zeros == True:
+        mask[ image == 0.00 ] = 1
+        mask = dilation( mask, disk(expand) )   # Expanding masks from MRF
+
     # Read in file with X Y positions of stars to be masked
     f = open( regionsfile,'r')
     for line in f:
@@ -162,11 +166,9 @@ def make_source_mask( image, header, regionsfile, outfile, mask_zeros = True, ex
 
     f.close()
 
-    if mask_zeros == True:
-        mask[ image == 0.00 ] = 1
-
-    mask = dilation( mask, disk(expand) )   # Expanding mask
-   
+    # Making sure all non-zero pixels are set to 1
+    mask = 1*(mask > 0)
+  
     fits.writeto( outfile, mask, header, clobber=True )
 
     return mask
