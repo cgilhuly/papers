@@ -206,7 +206,7 @@ def radial_profile_slice( data, mask, center, PA, width=0, bin_edges=[1000], bin
                 temp_vals = data[indices]
                 vals = np.append( vals, temp_vals )
                 
-            if len( vals ) > 0:
+            if len( vals ) > 1: 
 
                 N_temp = len( vals )
 
