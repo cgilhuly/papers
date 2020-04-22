@@ -140,14 +140,49 @@ from astropy.io import fits
 from skimage.morphology import erosion, dilation
 from skimage.morphology import disk
 
-def make_source_mask( image, header, regionsfile, outfile, mask_zeros = True, expand = 5 ):
+def make_source_mask( image, image2, header, regionsfile, outfile, mask_zeros = True, expand = 5 ):
 
     ymax, xmax = np.shape( image )
     mask = np.zeros( (ymax, xmax) )
 
     if mask_zeros == True:
         mask[ image == 0.00 ] = 1
-        mask = dilation( mask, disk(expand) )   # Expanding masks from MRF
+        mask[ image2 == 0.00 ] = 1
+
+        if expand > 0:
+            mask = dilation( mask, disk(expand) )   # Expanding masks from MRF
+
+    # Read in file with X Y positions of stars to be masked
+    f = open( regionsfile,'r')
+    for line in f:
+        x = int( float( line.split(',')[0] ) )
+        y = int( float( line.split(',')[1] ) )
+        rad = ( float( line.split(',')[2] ) )
+
+        temp_mask = np.zeros( (ymax, xmax) )
+        for i in range( 0, ymax ):
+            for j in range( 0, xmax ):
+                if ( i - y )**2 + ( j - x )**2 <= rad**2:
+                    temp_mask[ i,j ] = 1
+
+        mask = mask + temp_mask
+
+    f.close()
+
+    # Making sure all non-zero pixels are set to 1
+    mask = 1*(mask > 0)
+  
+    fits.writeto( outfile, mask, header, clobber=True )
+
+    return mask
+
+
+#############################################################################################################
+
+# Update source mask with ds9 regions file (for circular regions)
+#
+
+def update_source_mask( mask, header, regionsfile, outfile ):
 
     # Read in file with X Y positions of stars to be masked
     f = open( regionsfile,'r')
