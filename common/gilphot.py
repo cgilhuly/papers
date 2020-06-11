@@ -184,6 +184,8 @@ def make_source_mask( image, image2, header, regionsfile, outfile, mask_zeros = 
 
 def update_source_mask( mask, header, regionsfile, outfile ):
 
+    ymax, xmax = np.shape( mask )
+
     # Read in file with X Y positions of stars to be masked
     f = open( regionsfile,'r')
     for line in f:
