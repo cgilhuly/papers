@@ -160,6 +160,7 @@ def make_source_mask( image, image2, header, regionsfile, outfile, mask_zeros = 
         rad = ( float( line.split(',')[2] ) )
 
         temp_mask = np.zeros( (ymax, xmax) )
+        #!# Make this more efficient!
         for i in range( 0, ymax ):
             for j in range( 0, xmax ):
                 if ( i - y )**2 + ( j - x )**2 <= rad**2:
@@ -194,6 +195,7 @@ def update_source_mask( mask, header, regionsfile, outfile ):
         rad = ( float( line.split(',')[2] ) )
 
         temp_mask = np.zeros( (ymax, xmax) )
+        #!# Make this more efficient!
         for i in range( 0, ymax ):
             for j in range( 0, xmax ):
                 if ( i - y )**2 + ( j - x )**2 <= rad**2:
@@ -337,7 +339,6 @@ def write_profile( radii, SB, err=None, filename="~/Workspace/temp_profile.txt" 
 
 # Measure sky level and uncertainty in median sky
 #
-
 import matplotlib.pyplot as plt
 
 def sky_stats(masked_image, showHist=False):
@@ -413,7 +414,7 @@ def measure_azimuthal_variation(image, sectors=8, initial_mask=None, center=None
 
 #############################################################################################################
 
-# Measure variation in image between azimuthal sectors
+# Measure variation in image within annuli of increasing radius
 #
 def measure_radial_variation(image, sectors=9, rad1=600, rad2=1500, initial_mask=None, center=None):
 
@@ -462,3 +463,121 @@ def measure_radial_variation(image, sectors=9, rad1=600, rad2=1500, initial_mask
 
     return skies, sky_errs, sky_noise, central_radii
 
+
+#############################################################################################################
+
+# Measure variation in image within annuli of increasing radius
+#
+def find_best_sky(image, rad1=300, rad2=1000, initial_mask=None, center=None, width=20, step=20, baseline=5, thresh=1e-5, fulloutput=False, method="best_slope"):
+
+    ymax, xmax = np.shape(image)
+    if center:
+        y0 = center[0]
+        x0 = center[1]
+    else:
+        y0 = int(ymax/2.)
+        x0 = int(xmax/2.)
+
+    if np.any(np.isin(initial_mask, None)):
+        initial_mask = np.zeros((ymax, xmax)) # Starting with "blank" mask if there is no input mask
+
+    # Measure sky in each annulus
+    skies = []
+    sky_errs = []
+    sky_noise = []
+    central_radii = []
+
+    r1 = rad1
+    while r1 < rad2:
+
+        r2 = r1 + width
+        central_radii.append( (r1 + r2)/2. )
+
+        annulus_mask = make_annulus_mask(image, r1, r2)
+        temp_mask = initial_mask + annulus_mask
+        masked_image = np.ma.masked_where(temp_mask > 0, image)
+
+        median, med_err = sky_stats(masked_image)
+        sky_pixels = masked_image.compressed()
+
+        skies.append(median)
+        sky_errs.append(med_err)
+        sky_noise.append(np.std(sky_pixels))
+
+        r1 = r1 + step
+
+    # Determine local slope for each annulus
+    slopes = []
+    scores = []
+    for i in range(0,len(skies)):
+
+        # Want to avoid selecting missing sky values
+        if np.isnan(skies[i]):
+            slopes.append(99)
+            scores.append(99)
+            continue
+
+        # Fit slope to sky values within +/- $baseline steps
+        i_min = max(i-baseline, 0)
+        i_max = min(i+baseline, len(skies)-1)
+        
+        subset_skies = np.array(skies[i_min:i_max])
+        subset_radii = np.array(central_radii[i_min:i_max])
+        subset_weights = np.array(1./np.array(sky_errs[i_min:i_max]))
+
+        # Cleaning out any NaNs from sky values (due to masking)
+        idx = np.isfinite(subset_skies) & np.isfinite(subset_weights)
+        if np.sum(idx) < baseline:
+            slopes.append(99)
+            scores.append(99)
+            continue
+
+        # Fitting a line to selected subset of points to determine local slope
+        try:
+            params, res, _, _, _ = np.polyfit(subset_radii[idx], subset_skies[idx], 1, w=subset_weights[idx], full=True)
+            slopes.append(np.abs(params[0]))
+            scores.append(np.abs(params[0])*res/np.sum(idx))
+
+        except ValueError:
+            slopes.append(99)
+            scores.append(99)
+
+    # Checking for invalid method
+    if method not in ["best_slope", "best_score", "thresh_slope", "thresh_score"]:
+        print("Invalid method selected; defaulting to selecting sky by flattest local slope")
+        method = "best_slope"
+
+    # Select sky annulus with local slope closest to zero
+    if method == "best_slope":
+        best_i = slopes.index(min(slopes))
+
+    # Select sky annulus with score (slope * residuals) closest to zero
+    # Attempting to penalize symmetric peaks which can have "flat" local slope
+    elif method == "best_score":
+        best_i = scores.index(min(scores))
+    
+    # Select sky annulus with smallest radius that satisfies local flatness criteria
+    # Defaults to selecting local slope closest to zero if none are below threshold
+    elif method == "thresh_slope":
+        try:
+            best_sky = next(sky for sl, sky in zip(slopes, skies) if sl < thresh)
+            best_i = skies.index(best_sky)
+        except StopIteration:
+            best_i = slopes.index(min(slopes))
+
+    # Same as above, but threshold score (slope * residuals)
+    elif method == "thresh_score":
+        try:
+            best_sky = next(sky for sc, sky in zip(scores, skies) if sc < thresh)
+            best_i = skies.index(best_sky)
+        except StopIteration:
+            best_i = scores.index(min(scores))     
+
+    # Return full lists of skies, errors, and scores, or just the selected sky value + error
+    # Recommend full output as error returned is only standard error of median within radial bin
+    # (Does not account for broader variation in sky background)
+    if fulloutput:
+        return skies, sky_errs, best_i, slopes, scores, central_radii
+
+    else:
+        return skies[best_i], sky_errs[best_i]
