@@ -4,6 +4,15 @@
 
 import numpy as np
 
+from photutils import EllipticalAperture
+from photutils.isophote import EllipseGeometry, EllipseSample, Isophote, IsophoteList
+from photutils.isophote.isophote import Isophote, IsophoteList
+
+from photutils.isophote.sample import CentralEllipseSample
+from photutils.isophote.fitter import CentralEllipseFitter
+
+from photutils.isophote import build_ellipse_model
+
 #############################################################################################################
 
 # Produce annular mask using given radii in pixels and center position.
@@ -581,3 +590,401 @@ def find_best_sky(image, rad1=300, rad2=1000, initial_mask=None, center=None, wi
 
     else:
         return skies[best_i], sky_errs[best_i]
+
+#############################################################################################################
+
+# Quick plot of sky with selected radius marked
+
+def plot_skies(skies, errs, radii, best_index):
+    
+    plt.errorbar(radii, skies, yerr=errs)
+    plt.axvline(x=radii[best_index])
+    plt.xlabel("Central annulus radius (pixels)", size=18)
+    plt.ylabel("Median sky (ADU)", size=18)
+    plt.show() 
+
+
+#############################################################################################################
+
+# Convenience functions for imposing contours, plotting, etc
+
+def plot_isophotes( image, isolist, spacing = 5, log = True ):
+
+    if log:
+        plt.imshow( np.log10( image ), origin='lower' )
+    else:
+        plt.imshow( image, origin='lower' )
+    
+    rmax = isolist.sma[-1]
+ 
+    for r in np.arange(5,rmax,spacing):
+    
+        iso = isolist.get_closest( r )
+        x, y, = iso.sampled_coordinates()
+        plt.plot(x, y, color='white')
+    
+    plt.show()
+    
+    
+def fit_uniform_ellipses( image, x0, y0, phi, rmax = 0, eps = 0, integrmode = "bilinear" ):
+    
+    if rmax == 0:
+        rmax = 1.5 * max( np.shape( image ) )
+    
+    # Temporary list to store instances of Isophote
+    isolist_fixed_ = []
+
+    for rad in np.arange(1,rmax):
+
+        # Fixed ellipse geometry + current semi-major axis length
+        g = EllipseGeometry(x0, y0, rad, eps, phi)
+
+        # Sample the image on the fixed ellipse
+        sample = EllipseSample(image, g.sma, geometry=g, 
+                               integrmode=integrmode, sclip=3.0, nclip=3)
+        sample.update(g)
+
+        # Storing isophote in temporary list; arguments other than "sample" are arbitrary
+        iso_ = Isophote(sample, 0, True, 0)
+        isolist_fixed_.append(iso_)
+
+    isolist_fixed = IsophoteList(isolist_fixed_)
+    
+    return isolist_fixed
+
+
+def impose_isophotes( image, isolist_in, sclip=3.0, nclip=2, integrmode='bilinear', central_isophote=False ):
+    
+    # Temporary list to store instances of Isophote
+    isolist_temp = []
+
+    # Loop over the IsophoteList instance 
+
+    # First isophote requires special treatment. It's an instance of CentralEllipsePixel, 
+    # which requires special sampling by the CentralEllipseSample subclass.
+    #!# Note that quadrant profiles can't have the central isophote sampled due to masking
+    if central_isophote:
+        sample = CentralEllipseSample(image, 0., geometry=isolist_in[0].sample.geometry)
+        fitter = CentralEllipseFitter(sample)
+        center = fitter.fit()
+        isolist_temp.append(center)
+    
+    for iso in isolist_in[1:]:
+
+        g = iso.sample.geometry
+
+        # Sample the low-S/N image at the same geometry. 
+        # Should use same integration mode and same sigma-clipping settings
+        sample = EllipseSample(image, g.sma, geometry=g, 
+                               integrmode=integrmode, sclip=sclip, nclip=nclip)
+        sample.update(g)
+
+        iso_ = Isophote(sample, 0, True, 0)
+        isolist_temp.append(iso_)
+
+    return IsophoteList(isolist_temp)
+
+
+def roundify_outer_isophotes(image, isolist_in, r_start, r_stop=None, target_eps=0.0, sclip=3.0, nclip=2, integrmode='bilinear'):
+    
+    # Temporary list to store instances of Isophote
+    isolist_temp = []
+    
+    if not r_stop:
+        r_stop = 2*r_start
+
+    # Updating start and stop radii according to closest existing isophotes
+    iso1 = isolist_in.get_closest(r_start)
+    iso2 = isolist_in.get_closest(r_stop)
+    r_start = iso1.sma
+    r_stop = iso2.sma
+    
+    eps_0 = iso1.eps
+    
+    # Loop over the IsophoteList instance 
+    #
+    # Note that we skip the first isophote. It's an instance of CentralEllipsePixel, 
+    # which requires special sampling by the CentralEllipseSample subclass.
+    for iso in isolist_in[1:]:
+
+        g = iso.sample.geometry
+        
+        if g.sma < r_start:
+
+            # Sample the low-S/N image at the same geometry. 
+            # Should use same integration mode and same sigma-clipping settings
+            sample = EllipseSample(image, g.sma, geometry=g, 
+                                   integrmode=integrmode, sclip=sclip, nclip=nclip)
+            
+            sample.update(g)
+            
+        elif g.sma >= r_start and g.sma <= r_stop:
+            
+            # Determine intermediate ellipticity
+            # Starting off with linear decline
+            new_eps = eps_0 - (eps_0 - target_eps)*np.sin((g.sma - r_start)/(r_stop - r_start)*np.pi/2.) 
+            
+            # Define new EllipseGeometry (all the same but new ellipticity)
+            new_g = EllipseGeometry(iso.x0,
+                                    iso.y0,
+                                    iso.sma,
+                                    new_eps,
+                                    iso.pa,
+                                    g.astep,
+                                    g.linear_growth)
+            
+            sample = EllipseSample(image, new_g.sma, geometry=new_g, 
+                                   integrmode=integrmode, sclip=sclip, nclip=nclip)            
+            
+            sample.update(new_g)
+            
+        else:
+            
+            # Define new EllipseGeometry (all the same but new ellipticity)
+            new_g = EllipseGeometry(iso.x0,
+                                    iso.y0,
+                                    iso.sma,
+                                    target_eps,
+                                    iso.pa,
+                                    g.astep,
+                                    g.linear_growth)
+            
+            sample = EllipseSample(image, new_g.sma, geometry=new_g, 
+                                   integrmode=integrmode, sclip=sclip, nclip=nclip)            
+            
+            sample.update(new_g)            
+            
+
+        iso_ = Isophote(sample, 0, True, 0)
+        isolist_temp.append(iso_)
+
+    return IsophoteList(isolist_temp)
+
+
+def flux_to_mags(flux, sky, zeropoint, pix_size=2.5, default=np.nan):
+    
+    if (flux - sky) > 0:
+        return -2.5*np.log10(flux - sky) + zeropoint + 5*np.log10(pix_size)
+    else:
+        return default
+
+#############################################################################################################
+
+# Class to manage splitting image into quadrants for profile extraction
+
+class QuadrantProfiles:
+    
+    def __init__(self, image, source_mask, master_isophotes, center, theta0, verbose=True):
+        
+        self.quadMask = np.zeros((4,) + np.shape(image))
+        self.quadIsophotes = []
+        self.positionAngle = theta0
+        self.center = center
+        
+        for i in range(0,4):
+            
+            theta1 = theta0 + i*np.pi/2.
+            theta2 = theta1 + np.pi/2.
+            
+            # Generate quadrant masks
+            temp_mask = make_sector_mask(image, theta1, theta2, center=center)
+            temp_mask = temp_mask + source_mask
+            if verbose:
+                print(f"Quadrant and source mask for quad {i}:")
+                plt.imshow(temp_mask, origin="lower")
+                plt.show()
+                
+            self.quadMask[i] = 1*((temp_mask + source_mask) > 0)
+        
+            # Generate quadrant IsophoteList objects
+            temp_image = np.ma.masked_where(self.quadMask[i] > 0, image)
+            self.quadIsophotes.append(impose_isophotes(temp_image, master_isophotes))      
+        
+        # Sky and sky error is initialized empty
+        self.quadSky = np.zeros((4))
+        self.quadSkyErr = np.zeros((4))
+        self.quadSkySysErr = np.zeros((4))
+        
+        # Other quantities to initialize
+        self.quadLimits = np.ones((4))*99999    # Arbitrarily large initial limits
+        #######        
+    
+    def measure_sky(self, image, radius_inner, radius_outer, bin_width=20, baseline=5, method="best_slope", thresh=1e-3, tweak=False):
+        
+        # Tweak-mode gives access to slope/score to choose best method and/or threshold for target
+        if tweak:
+            slopes = []
+            scores = []
+            radii = []
+        
+        for i in range(0,4):
+            
+            print(f"Measuring sky for quadrant {i} ...")
+            
+            sky, err, best_i, slope, score, rad = find_best_sky(image, 
+                                                                rad1=radius_inner, 
+                                                                rad2=radius_outer, 
+                                                                initial_mask=self.quadMask[i], 
+                                                                center=self.center, 
+                                                                width=bin_width, 
+                                                                step=bin_width, 
+                                                                baseline=baseline, 
+                                                                fulloutput=True, 
+                                                                method=method,
+                                                                thresh=thresh)
+            
+            self.quadSky[i] = sky[best_i]
+            self.quadSkyErr[i] = err[best_i]
+            self.quadSkySysErr[i] = np.nanstd(sky)
+            
+            # Quick plot of the sky radial profile + vertical line indicating selected value
+            plot_skies(sky, err, rad, best_i)
+            
+            if tweak:
+                slopes.append(slope)
+                scores.append(score)
+                radii.append(rad) 
+                
+        if tweak:
+            return slopes, scores, radii
+        else:
+            return
+    
+    
+    def set_quad_limits(self, limits):
+        
+        self.quadLimits = limits
+        
+        
+    def get_radii(self):
+        
+        return np.unique(np.concatenate((self.quadIsophotes[0].sma,
+                                         self.quadIsophotes[1].sma,
+                                         self.quadIsophotes[2].sma,
+                                         self.quadIsophotes[3].sma)))
+        
+    
+    def combine_quad_profiles(self, master_isophotes, master_sky, zeropoint, pix_size=2.5):
+    
+        radii = self.get_radii()
+    
+        SB_mag = []
+        SB_err_p = []
+        SB_err_m = []
+        SB_err_ps = []
+        SB_err_ms = []
+
+        # Storing profile/error in flux units internally
+        # (Important intermediates for colour error calculations
+        self.combinedFlux = []
+        self.combinedFluxErr = []
+        self.combinedFluxSysErr = []
+    
+        for r in radii:
+        
+            temp_flux = 0
+            temp_npix = 0
+            temp_err = 0
+            temp_err_sys = 0
+        
+            for i in range(0,4): 
+                
+                if r in self.quadIsophotes[i].sma and r < self.quadLimits[i]/pix_size:
+                
+                    index = np.where(self.quadIsophotes[i].sma == r)[0][0]
+                    if not np.isnan(self.quadIsophotes[i].intens[index]):
+                    
+                        n_good = self.quadIsophotes[i].ndata[index]
+                        temp_flux += (self.quadIsophotes[i].intens[index] - self.quadSky[i])*n_good
+                        temp_npix += n_good
+                        temp_err += n_good**2 * (self.quadIsophotes[i].int_err[index]**2 + self.quadSkyErr[i]**2)
+                        temp_err_sys += n_good**2 * (self.quadIsophotes[i].int_err[index]**2 + self.quadSkyErr[i]**2 + self.quadSkySysErr[i]**2)
+                  
+            # If at least one quadrant profile has good pixels at current radius
+            if temp_npix != 0:
+            
+                temp_flux = temp_flux/(temp_npix) # Renormalizing weighted SB 
+                temp_SB = flux_to_mags(temp_flux, 0, zeropoint)
+                SB_mag.append(temp_SB)
+        
+                temp_err = np.sqrt(temp_err)/(temp_npix)
+                temp_err_sys = np.sqrt(temp_err_sys)/(temp_npix)
+        
+                # Asymmetric error bars (error in flux shown on log scale)
+                # Setting default=40 mag/arcsec^2 for lower error bounds, in case they are undefined
+                SB_err_m.append(flux_to_mags(temp_flux - temp_err, 0, zeropoint, default=40))
+                SB_err_p.append(flux_to_mags(temp_flux + temp_err, 0, zeropoint))
+                SB_err_ms.append(flux_to_mags(temp_flux - temp_err_sys, 0, zeropoint, default=40))
+                SB_err_ps.append(flux_to_mags(temp_flux + temp_err_sys, 0, zeropoint))
+        
+                # Symmetric error bars (error in log(flux))
+                #SB_err_all_r.append(2.5*np.log10(np.e)/temp_flux * temp_err)
+                #SB_err_all_rs.append(2.5*np.log10(np.e)/temp_flux * temp_err_sys)
+
+                self.combinedFlux.append(temp_flux)
+                self.combinedFluxErr.append(temp_err)
+                self.combinedFluxSysErr.append(temp_err_sys)
+   
+            # If no quadrant profiles have good pixels but not beyond max radius
+            # This should be triggered for points close to the center
+            elif r < max(self.quadLimits)/pix_size:
+        
+                i = np.where(master_isophotes.sma == r)[0][0]
+            
+                temp_err = np.sqrt(master_isophotes.int_err[i]**2 + master_sky[1]**2)
+                temp_err_sys = np.sqrt(master_isophotes.int_err[i]**2 + master_sky[1]**2 + master_sky[2]**2)
+               
+                SB_mag.append(flux_to_mags(master_isophotes.intens[i], master_sky[0], zeropoint))     
+                SB_err_p.append(flux_to_mags(master_isophotes.intens[i] + temp_err, master_sky[0], zeropoint))
+                SB_err_m.append(flux_to_mags(master_isophotes.intens[i] - temp_err, master_sky[0], zeropoint, default=40))
+                SB_err_ps.append(flux_to_mags(master_isophotes.intens[i] + temp_err_sys, master_sky[0], zeropoint))
+                SB_err_ms.append(flux_to_mags(master_isophotes.intens[i] - temp_err_sys, master_sky[0], zeropoint, default=40))
+
+                self.combinedFlux.append(temp_flux)
+                self.combinedFluxErr.append(temp_err)
+                self.combinedFluxSysErr.append(temp_err_sys)
+        
+            # No quadrants with good pixels, beyond maximum radius
+            else:
+        
+                SB_mag.append(np.nan)
+                SB_err_p.append(np.nan)
+                SB_err_m.append(np.nan)
+                SB_err_ps.append(np.nan)
+                SB_err_ms.append(np.nan)
+
+                self.combinedFlux.append(np.nan)
+                self.combinedFluxErr.append(np.nan)
+                self.combinedFluxSysErr.append(np.nan)
+    
+        # Adding in central measurement from master IsophoteList
+        if radii[0] != 0 and master_isophotes.sma[0] == 0:
+    
+            radii = np.concatenate(([0], radii))
+            temp_err = np.sqrt(master_isophotes.int_err[0]**2 + master_sky[1]**2)
+            temp_err_sys = np.sqrt(master_isophotes.int_err[0]**2 + master_sky[1]**2 + master_sky[2]**2)
+    
+            SB_mag.insert(0, flux_to_mags(master_isophotes.intens[0], master_sky[0], zeropoint))
+            SB_err_p.insert(0, flux_to_mags(master_isophotes.intens[0] + temp_err, master_sky[0], zeropoint))
+            SB_err_m.insert(0, flux_to_mags(master_isophotes.intens[0] - temp_err, master_sky[0], zeropoint, default=40))
+            SB_err_ps.insert(0, flux_to_mags(master_isophotes.intens[0] + temp_err_sys, master_sky[0], zeropoint))
+            SB_err_ms.insert(0, flux_to_mags(master_isophotes.intens[0] - temp_err_sys, master_sky[0], zeropoint, default=40))
+
+            self.combinedFlux.insert(0, master_isophotes.intens[0])
+            self.combinedFluxErr.insert(0, temp_err)
+            self.combinedFluxSysErr.insert(0, temp_err_sys)
+
+
+        return radii, SB_mag, SB_err_p, SB_err_m, SB_err_ps, SB_err_ms
+    
+    def show_quadrants(self):
+        
+        fig, ax = plt.subplots(2, 2)
+        
+        ax[0,0].imshow(self.quadMask[0], origin="lower")
+        ax[0,1].imshow(self.quadMask[1], origin="lower")
+        ax[1,0].imshow(self.quadMask[2], origin="lower")
+        ax[1,1].imshow(self.quadMask[3], origin="lower")
+        
+        fig.set_size_inches(8,8)
+        plt.show()
