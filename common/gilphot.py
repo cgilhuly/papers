@@ -974,8 +974,12 @@ class QuadrantProfiles:
             self.combinedFluxErr.insert(0, temp_err)
             self.combinedFluxSysErr.insert(0, temp_err_sys)
 
+        self.combinedFlux = np.array(self.combinedFlux)
+        self.combinedFluxErr = np.array(self.combinedFluxErr)
+        self.combinedFluxSysErr = np.array(self.combinedFluxSysErr)
 
-        return radii, SB_mag, SB_err_p, SB_err_m, SB_err_ps, SB_err_ms
+
+        return radii, np.array(SB_mag), np.array(SB_err_p), np.array(SB_err_m), np.array(SB_err_ps), np.array(SB_err_ms)
     
     def show_quadrants(self):
         
