@@ -685,7 +685,7 @@ def impose_isophotes( image, isolist_in, sclip=3.0, nclip=2, integrmode='bilinea
     return IsophoteList(isolist_temp)
 
 
-def roundify_outer_isophotes(image, isolist_in, r_start, r_stop=None, target_eps=0.0, sclip=3.0, nclip=2, integrmode='bilinear'):
+def roundify_outer_isophotes(image, isolist_in, r_start, r_stop=None, target_eps=0.0, sclip=3.0, nclip=2, integrmode='bilinear', central_isophote=False):
     
     # Temporary list to store instances of Isophote
     isolist_temp = []
@@ -703,8 +703,15 @@ def roundify_outer_isophotes(image, isolist_in, r_start, r_stop=None, target_eps
     
     # Loop over the IsophoteList instance 
     #
-    # Note that we skip the first isophote. It's an instance of CentralEllipsePixel, 
+    # First isophote requires special treatment. It's an instance of CentralEllipsePixel, 
     # which requires special sampling by the CentralEllipseSample subclass.
+    #!# Note that quadrant profiles can't have the central isophote sampled due to masking
+    if central_isophote:
+        sample = CentralEllipseSample(image, 0., geometry=isolist_in[0].sample.geometry)
+        fitter = CentralEllipseFitter(sample)
+        center = fitter.fit()
+        isolist_temp.append(center)
+
     for iso in isolist_in[1:]:
 
         g = iso.sample.geometry
@@ -809,7 +816,7 @@ class QuadrantProfiles:
         self.quadLimits = np.ones((4))*99999    # Arbitrarily large initial limits
         #######        
     
-    def measure_sky(self, image, radius_inner, radius_outer, bin_width=20, baseline=5, method="best_slope", thresh=1e-3, tweak=False):
+    def measure_sky(self, image, radius_inner, radius_outer, bin_width=20, baseline=5, method="best_slope", thresh=1e-3, mask=None, default=None, tweak=False):
         
         # Tweak-mode gives access to slope/score to choose best method and/or threshold for target
         if tweak:
@@ -820,11 +827,24 @@ class QuadrantProfiles:
         for i in range(0,4):
             
             print(f"Measuring sky for quadrant {i} ...")
+
+            # May need to specify new mask for sky measurement
+            # ex. if galaxy has a large stream
+            if mask is not None:
+                theta1 = self.positionAngle + i*np.pi/2.
+                theta2 = theta1 + np.pi/2.
+            
+                # Generate quadrant masks
+                temp_mask = make_sector_mask(image, theta1, theta2, center=self.center)
+                temp_mask = 1*((temp_mask + mask) > 0)
+
+            else:
+                temp_mask = self.quadMask[i]           
             
             sky, err, best_i, slope, score, rad = find_best_sky(image, 
                                                                 rad1=radius_inner, 
                                                                 rad2=radius_outer, 
-                                                                initial_mask=self.quadMask[i], 
+                                                                initial_mask=temp_mask, 
                                                                 center=self.center, 
                                                                 width=bin_width, 
                                                                 step=bin_width, 
@@ -832,10 +852,20 @@ class QuadrantProfiles:
                                                                 fulloutput=True, 
                                                                 method=method,
                                                                 thresh=thresh)
-            
-            self.quadSky[i] = sky[best_i]
-            self.quadSkyErr[i] = err[best_i]
-            self.quadSkySysErr[i] = np.nanstd(sky)
+            if not np.isnan(sky[best_i]):
+                self.quadSky[i] = sky[best_i]
+                self.quadSkyErr[i] = err[best_i]
+                self.quadSkySysErr[i] = np.nanstd(sky)
+
+            elif np.isnan(sky[best_i]) and default is not None:
+                self.quadSky[i] = default[0]
+                self.quadSkyErr[i] = default[1]
+                self.quadSkySysErr[i] = default[2]
+
+            else:
+                print("WARNING: no sky measurement available for this quadrant.")
+                print("Try decreasing the inner radius limit or specify a default sky value to adopt.")
+                print("eg. default=[sky, sky_err, sky_sys_err]")
             
             # Quick plot of the sky radial profile + vertical line indicating selected value
             plot_skies(sky, err, rad, best_i)
