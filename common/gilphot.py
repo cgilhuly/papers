@@ -970,7 +970,7 @@ class QuadrantProfiles:
                 SB_err_ps.append(flux_to_mags(master_isophotes.intens[i] + temp_err_sys, master_sky[0], zeropoint))
                 SB_err_ms.append(flux_to_mags(master_isophotes.intens[i] - temp_err_sys, master_sky[0], zeropoint, default=40))
 
-                self.combinedFlux.append(master_isophotes.intens[i])
+                self.combinedFlux.append(master_isophotes.intens[i] - master_sky[0])
                 self.combinedFluxErr.append(temp_err)
                 self.combinedFluxSysErr.append(temp_err_sys)
         
@@ -1000,7 +1000,7 @@ class QuadrantProfiles:
             SB_err_ps.insert(0, flux_to_mags(master_isophotes.intens[0] + temp_err_sys, master_sky[0], zeropoint))
             SB_err_ms.insert(0, flux_to_mags(master_isophotes.intens[0] - temp_err_sys, master_sky[0], zeropoint, default=40))
 
-            self.combinedFlux.insert(0, master_isophotes.intens[0])
+            self.combinedFlux.insert(0, master_isophotes.intens[0] - master_sky[0])
             self.combinedFluxErr.insert(0, temp_err)
             self.combinedFluxSysErr.insert(0, temp_err_sys)
 
