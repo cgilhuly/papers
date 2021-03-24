@@ -770,10 +770,22 @@ def roundify_outer_isophotes(image, isolist_in, r_start, r_stop=None, target_eps
 
 def flux_to_mags(flux, sky, zeropoint, pix_size=2.5, default=np.nan):
     
-    if (flux - sky) > 0:
-        return -2.5*np.log10(flux - sky) + zeropoint + 5*np.log10(pix_size)
+    flux = np.asarray(flux)
+    scalar_input = False
+
+    if flux.ndim == 0:
+        scalar_input = True
+        flux = flux[np.newaxis]
+
+    mags = np.where((flux-sky)>0, 
+                    -2.5*np.log10(flux - sky) + zeropoint + 5*np.log10(pix_size),
+                    default)
+
+    # Making sure to return scalar value if input flux is scalar, not array
+    if scalar_input:
+        return np.squeeze(mags)
     else:
-        return default
+        return mags
 
 #############################################################################################################
 
