@@ -768,6 +768,26 @@ def roundify_outer_isophotes(image, isolist_in, r_start, r_stop=None, target_eps
     return IsophoteList(isolist_temp)
 
 
+# Get area of isophotes using unmasked reference image
+def get_iso_areas(isophotes, image):
+
+    areas = np.zeros(isophotes_r.intens.shape)
+
+    # Creating dummy IsophoteList with unmasked image
+    if isophotes.sma[0] == 0:
+        dummy = gp.impose_isophotes(image, isophotes, central_isophote=True)
+    else:
+        dummy = gp.impose_isophotes(image, isophotes)
+        areas[0] = dummy.npix_e[0]
+
+    # npix_e[i]: area in pixels**2 contained inside ith isophote
+    # Subtracting area contained in previous isophote to get annular area
+    for i in range(1, len(areas)):       
+        areas[i] = dummy.npix_e[i] - dummy.npix_e[i-1]
+        
+    return areas
+
+
 def flux_to_mags(flux, sky, zeropoint, pix_size=2.5, default=np.nan):
     
     flux = np.asarray(flux)
@@ -786,6 +806,27 @@ def flux_to_mags(flux, sky, zeropoint, pix_size=2.5, default=np.nan):
         return np.squeeze(mags)
     else:
         return mags
+
+
+def integrate_profile(profile, area, prof_err, area_err, valtype="log"):
+    
+    if valtype == "linear":      
+        temp = [a*p for a, p in zip(area, profile) if a > 0 and np.isfinite(p)]
+        temp_err = [(a*p)**2 * ((area_err/a)**2 + (p_err/p)**2) 
+                    for a, p, p_err in zip(area, profile, prof_err) 
+                    if a > 0 and np.isfinite(p)] 
+        return np.sum(temp), np.sqrt(np.sum(temp_err))
+    
+    elif valtype == "log":
+        temp = [a*np.power(10, p) for a, p in zip(area, profile) if a > 0 and np.isfinite(p)]
+        temp_err = [(a*np.power(10, p))**2 * ((area_err/a)**2 + (p_err/np.log10(np.e))**2) 
+                    for a, p, p_err in zip(area, profile, prof_err) 
+                    if a > 0 and np.isfinite(p)] 
+        return np.log10(np.sum(temp)), np.sqrt(np.sum(temp_err))*np.log10(np.e)/np.sum(temp)
+        
+    elif valtype == "mag":
+        raise NotImplementedError 
+
 
 #############################################################################################################
 
