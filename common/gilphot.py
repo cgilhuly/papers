@@ -771,13 +771,13 @@ def roundify_outer_isophotes(image, isolist_in, r_start, r_stop=None, target_eps
 # Get area of isophotes using unmasked reference image
 def get_iso_areas(isophotes, image):
 
-    areas = np.zeros(isophotes_r.intens.shape)
+    areas = np.zeros(isophotes.intens.shape)
 
     # Creating dummy IsophoteList with unmasked image
     if isophotes.sma[0] == 0:
-        dummy = gp.impose_isophotes(image, isophotes, central_isophote=True)
+        dummy = impose_isophotes(image, isophotes, central_isophote=True)
     else:
-        dummy = gp.impose_isophotes(image, isophotes)
+        dummy = impose_isophotes(image, isophotes)
         areas[0] = dummy.npix_e[0]
 
     # npix_e[i]: area in pixels**2 contained inside ith isophote
