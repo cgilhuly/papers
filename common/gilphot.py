@@ -668,8 +668,14 @@ def impose_isophotes( image, isolist_in, sclip=3.0, nclip=2, integrmode='bilinea
         fitter = CentralEllipseFitter(sample)
         center = fitter.fit()
         isolist_temp.append(center)
-    
-    for iso in isolist_in[1:]:
+
+    # Need to make sure that first isophote is skipped *IFF* it is a central sample (sma==0)    
+    if isolist_in.sma[0] == 0:
+        isolist_loop = isolist_in[1:]
+    else:
+        isolist_loop = isolist_in
+
+    for iso in isolist_loop:
 
         g = iso.sample.geometry
 
