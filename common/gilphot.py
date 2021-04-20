@@ -833,6 +833,9 @@ def integrate_profile(profile, area, prof_err, area_err, valtype="log"):
     elif valtype == "mag":
         raise NotImplementedError 
 
+    else:
+        raise ValueError("Invalid profile value type specified; valid types are linear, log, and mag")
+
 
 #############################################################################################################
 
