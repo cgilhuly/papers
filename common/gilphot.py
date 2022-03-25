@@ -263,7 +263,7 @@ def radial_profile_slice( data, mask, center, PA, width=0, bin_edges=[1000], bin
 
                 # Median is not as efficient an estimator as mean, but is resistant to outliers
                 median_efficiency = np.pi * N_temp / ( 2 * N_temp - 2 ) # pi/2 for large N
-                errprofile.append( np.std( vals ) * np.sqrt( median_efficiency ) / np.sqrt( N_temp ) )
+                errprofile.append( np.std(vals, ddof=1) * np.sqrt( median_efficiency ) / np.sqrt( N_temp ) )
 
             # NaN entries when no unmasked pixels exist in current radial bin
             else:
@@ -359,7 +359,7 @@ def sky_stats(masked_image, showHist=False):
 
     median = np.median(sky_pixels)
 
-    med_err = np.std( sky_pixels ) / np.sqrt( len(sky_pixels) ) * np.sqrt( np.pi/2. )
+    med_err = np.std(sky_pixels, ddof=1) / np.sqrt( len(sky_pixels) ) * np.sqrt( np.pi/2. )
 
     if showHist:
         plt.hist(sky_pixels, bins=100)
@@ -410,7 +410,7 @@ def measure_azimuthal_variation(image, sectors=8, initial_mask=None, center=None
 
         skies.append(median)
         sky_errs.append(med_err)
-        sky_noise.append(np.std(sky_pixels))
+        sky_noise.append(np.std(sky_pixels, ddof=1))
 
         print()
         print(f"Sector {i}: theta = {theta1*180./np.pi} - {theta2*180./np.pi} degrees")
@@ -451,7 +451,7 @@ def measure_radial_variation(image, sectors=9, rad1=600, rad2=1500, initial_mask
         r2 = r1 + delta_rad
         central_radii.append( (r1 + r2)/2. )
 
-        annulus_mask = make_annulus_mask(image, r1, r2)
+        annulus_mask = make_annulus_mask(image, r1, r2, center=center)
         temp_mask = initial_mask + annulus_mask
         masked_image = np.ma.masked_where(temp_mask > 0, image)
         #plt.imshow(temp_mask); plt.show()  # For troubleshooting
@@ -461,7 +461,7 @@ def measure_radial_variation(image, sectors=9, rad1=600, rad2=1500, initial_mask
 
         skies.append(median)
         sky_errs.append(med_err)
-        sky_noise.append(np.std(sky_pixels))
+        sky_noise.append(np.std(sky_pixels, ddof=1))
 
         print()
         print(f"Sector {i}: radius {r1} - {r2} pixels")
@@ -502,7 +502,7 @@ def find_best_sky(image, rad1=300, rad2=1000, initial_mask=None, center=None, wi
         r2 = r1 + width
         central_radii.append( (r1 + r2)/2. )
 
-        annulus_mask = make_annulus_mask(image, r1, r2)
+        annulus_mask = make_annulus_mask(image, r1, r2, center=center)
         temp_mask = initial_mask + annulus_mask
         masked_image = np.ma.masked_where(temp_mask > 0, image)
 
@@ -511,7 +511,7 @@ def find_best_sky(image, rad1=300, rad2=1000, initial_mask=None, center=None, wi
 
         skies.append(median)
         sky_errs.append(med_err)
-        sky_noise.append(np.std(sky_pixels))
+        sky_noise.append(np.std(sky_pixels, ddof=1))
 
         r1 = r1 + step
 
@@ -1084,3 +1084,252 @@ class QuadrantProfiles:
         
         fig.set_size_inches(8,8)
         plt.show()
+
+
+#############################################################################################################
+
+# Class to extract profiles in wedges (along minor, major, or intermediate axes)
+
+class WedgeProfiles:
+    
+    def __init__(self, image, source_mask, center, theta0, width=45*np.pi/180., t="minor", verbose=True):
+        
+        self.wedgeMask = np.zeros((2,) + np.shape(image))
+        self.positionAngle = theta0
+        self.center = center
+        self.width = width
+        self.type = t
+        
+        if self.type == "minor":
+            self.offset = 0
+        elif self.type == "intermediate":
+            self.offset = 45*np.pi/180.
+        elif self.type == "major":
+            self.offset = 90*np.pi/180
+        else:
+            raise ValueError("Wedge profile type must be minor, major, or intermediate.")
+        
+        for i in range(0,2):
+            
+            theta1 = theta0 + self.offset - self.width/2. + i*np.pi
+            theta2 = theta1 + self.width
+            
+            # Generate quadrant masks
+            temp_mask = make_sector_mask(image, theta1, theta2, center=center)
+            temp_mask = temp_mask + source_mask
+            if verbose:
+                print(f"Wedge + source mask for wedge {i}:")
+                plt.imshow(temp_mask, origin="lower")
+                plt.show()
+                
+            self.wedgeMask[i] = 1*((temp_mask + source_mask) > 0)    
+        
+        # Sky and sky error is initialized empty
+        self.wedgeSky = np.zeros((2))
+        self.wedgeSkyErr = np.zeros((2))
+        self.wedgeSkySysErr = np.zeros((2)) 
+        
+        # Flux and flux errors initialized as None
+        self.flux_flag = False
+        self.flux = None
+        self.fluxErr = None
+        self.fluxSysErr = None
+        self.n_pixels = None
+        self.areas = None
+    
+    def measure_sky(self, image, radius_inner, radius_outer, bin_width=20, baseline=5, method="best_slope", thresh=1e-3, mask=None, default=None, tweak=False):
+        
+        # Tweak-mode gives access to slope/score to choose best method and/or threshold for target
+        if tweak:
+            slopes = []
+            scores = []
+            radii = []
+        
+        for i in range(0,2):
+            
+            print(f"Measuring sky for wedge {i} ...")
+
+            # May need to specify new mask for sky measurement
+            # ex. if galaxy has a large stream
+            if mask is not None:
+                theta1 = theta0 + self.offset - self.width/2. + i*np.pi
+                theta2 = theta1 + self.width
+            
+                # Generate quadrant masks
+                temp_mask = make_sector_mask(image, theta1, theta2, center=self.center)
+                temp_mask = 1*((temp_mask + mask) > 0)
+
+            else:
+                temp_mask = self.wedgeMask[i]           
+            
+            sky, err, best_i, slope, score, rad = find_best_sky(image, 
+                                                                rad1=radius_inner, 
+                                                                rad2=radius_outer, 
+                                                                initial_mask=temp_mask, 
+                                                                center=self.center, 
+                                                                width=bin_width, 
+                                                                step=bin_width, 
+                                                                baseline=baseline, 
+                                                                fulloutput=True, 
+                                                                method=method,
+                                                                thresh=thresh)
+            if not np.isnan(sky[best_i]):
+                self.wedgeSky[i] = sky[best_i]
+                self.wedgeSkyErr[i] = err[best_i]
+                self.wedgeSkySysErr[i] = np.nanstd(sky)
+
+            elif np.isnan(sky[best_i]) and default is not None:
+                self.wedgeSky[i] = default[0]
+                self.wedgeSkyErr[i] = default[1]
+                self.wedgeSkySysErr[i] = default[2]
+
+            else:
+                print("WARNING: no sky measurement available for this quadrant.")
+                print("Try decreasing the inner radius limit or specify a default sky value to adopt.")
+                print("eg. default=[sky, sky_err, sky_sys_err]")
+            
+            # Quick plot of the sky radial profile + vertical line indicating selected value
+            plot_skies(sky, err, rad, best_i)
+            
+            if tweak:
+                slopes.append(slope)
+                scores.append(score)
+                radii.append(rad) 
+                
+        if tweak:
+            return slopes, scores, radii
+        else:
+            return
+
+    def _extract_flux_profiles(self, image, r_min=0, r_max=500, step=5, scale="linear"):
+        
+        # Generate list of bin boundaries
+        bin_edges = [r_min]
+        temp_r = r_min
+        while temp_r < r_max:
+            
+            if scale == "linear":
+                next_r = temp_r + step
+            elif scale == "log":
+                next_r = temp_r + max(2, np.power(step, 2*temp_r/r_max))
+                
+            temp_r = next_r
+            bin_edges.append(temp_r)
+            
+        # From bin boundaries, generate list of central radii
+        self.radii = [(r1+r2)/2 for r1, r2 in zip(bin_edges[:-1], bin_edges[1:])]
+        self.flux = np.empty((2,len(self.radii)))
+        self.fluxErr = np.empty((2,len(self.radii)))
+        self.fluxSysErr = np.empty((2,len(self.radii)))
+        self.n_pixels = np.empty((2,len(self.radii)))
+        self.areas = np.empty(len(self.radii))
+        
+        self.flux[:] = np.nan
+        self.fluxErr[:] = np.nan
+        self.fluxSysErr[:] = np.nan
+        self.n_pixels[:] = np.nan
+        self.areas[:] = np.nan
+                
+        # For each bin, make an annular mask and apply to the wedge mask
+        for i in range(0,len(self.radii)):
+            
+            annulus_mask = make_annulus_mask(image, rad1=bin_edges[i], rad2=bin_edges[i+1], center=self.center)
+
+            # Calculating areas of bins for future reference (bin edges not saved)
+            self.areas[i] = np.pi*(bin_edges[i+1]**2 - bin_edges[i]**2)
+            
+            for j in range(0,2):
+                bin_mask = self.wedgeMask[j] + annulus_mask
+                masked_image = np.ma.masked_where(bin_mask > 0, image)
+                pixels = masked_image.compressed()
+                
+                if len(pixels) == 0:
+                    mean_flux = np.nan
+                    err = np.nan
+                else:
+                    mean_flux = np.mean(pixels)
+                    err = np.std(pixels, ddof=1)/np.sqrt(len(pixels)) 
+                
+                self.flux[j,i] = mean_flux - self.wedgeSky[j]
+                self.fluxErr[j,i] = np.sqrt(err**2 + self.wedgeSkyErr[j]**2)
+                self.fluxSysErr[j,i] = np.sqrt(err**2 + self.wedgeSkyErr[j]**2 + self.wedgeSkySysErr[j]**2)
+                self.n_pixels[j,i] = len(pixels)
+                
+        self.flux_flag = True
+        return 
+    
+
+    def get_single_profile(self, image, zeropoint, r_min=0, r_max=500, step=5, scale="linear", output="mags"):
+        
+        if output not in ["mags", "linear"]:
+            raise ValueError("Profile output type must be 'mags' or 'linear'")
+
+        if self.flux_flag == False:
+            self._extract_flux_profiles(image, r_min=r_min, r_max=r_max, step=step, scale=scale)
+
+        # Averaging the profiles from the two wedges
+        # Using np.nanmean to ignore NaNs -- if one wedge is fully masked out,
+        # the result will be the profile from the unmasked wedge
+
+        temp_weights = self.n_pixels
+        temp_weights[temp_weights == 0] = np.nan
+
+        combined_flux = np.nanmean(self.flux*self.n_pixels, axis=0)
+        combined_flux = combined_flux/np.nanmean(temp_weights, axis=0)
+        
+        combined_err = np.nanmean((self.fluxErr*self.n_pixels)**2, axis=0)
+        combined_err = np.sqrt(combined_err/np.nanmean(temp_weights**2, axis=0))
+        
+        combined_syserr = np.nanmean((self.fluxSysErr*self.n_pixels)**2, axis=0)
+        combined_syserr = np.sqrt(combined_syserr/np.nanmean(temp_weights**2, axis=0))
+            
+        #combined_flux = self.flux[0]*self.n_pixels[0] + self.flux[1]*self.n_pixels[1]
+        #combined_flux = combined_flux/(self.n_pixels[0] + self.n_pixels[1])
+        
+        #combined_err = (self.fluxErr[0]*self.n_pixels[0])**2 + (self.fluxErr[1]*self.n_pixels[1])**2
+        #combined_err = np.sqrt(combined_err/(self.n_pixels[0]**2 + self.n_pixels[1]**2))
+        
+        #combined_syserr = (self.fluxSysErr[0]*self.n_pixels[0])**2 + (self.fluxSysErr[1]*self.n_pixels[1])**2
+        #combined_syserr = np.sqrt(combined_syserr/(self.n_pixels[0]**2 + self.n_pixels[1]**2))
+
+        if output == "linear":
+            return np.array(self.radii), combined_flux, combined_err, combined_syserr
+        
+        SB = flux_to_mags(combined_flux, 0, zeropoint, default=40)
+        SB_err_m = flux_to_mags(combined_flux - combined_err, 0, zeropoint, default=40)
+        SB_err_p = flux_to_mags(combined_flux + combined_err, 0, zeropoint)
+        SB_err_ms = flux_to_mags(combined_flux - combined_syserr, 0, zeropoint, default=40)
+        SB_err_ps = flux_to_mags(combined_flux + combined_syserr, 0, zeropoint)
+        
+        plt.plot(self.radii, SB, label="Wedge 0 + Wedge 1")
+        plt.gca().invert_yaxis()
+        plt.legend()
+        plt.show()
+        
+        return np.array(self.radii), SB, SB_err_m, SB_err_p, SB_err_ms, SB_err_ps
+    
+        
+    def get_wedge_profiles(self, image, zeropoint, r_min=0, r_max=500, step=5, scale="linear", output="mags"):        
+
+        if output not in ["mags", "linear"]:
+            raise ValueError("Profile output type must be 'mags' or 'linear'")
+
+        if self.flux_flag == False:
+            self._extract_flux_profiles(image, r_min=r_min, r_max=r_max, step=step, scale=scale)
+
+        if output == "linear":
+            return np.array(self.radii), self.flux, self.fluxErr, self.fluxSysErr
+        
+        SB = flux_to_mags(self.flux, 0, zeropoint, default=40)
+        SB_err_m = flux_to_mags(self.flux - self.fluxErr, 0, zeropoint, default=40)
+        SB_err_p = flux_to_mags(self.flux + self.fluxErr, 0, zeropoint)
+        SB_err_ms = flux_to_mags(self.flux - self.fluxSysErr, 0, zeropoint, default=40)
+        SB_err_ps = flux_to_mags(self.flux + self.fluxSysErr, 0, zeropoint)
+        
+        plt.plot(self.radii, SB[0], label="Wedge 0")
+        plt.plot(self.radii, SB[1], label="Wedge 1")
+        plt.gca().invert_yaxis()
+        plt.legend()
+        plt.show()
+        
+        return np.array(self.radii), SB, SB_err_m, SB_err_p, SB_err_ms, SB_err_ps
